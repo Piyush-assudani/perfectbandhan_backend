@@ -9,6 +9,10 @@ const redisService = require('./services/redis.service');
 const authRoutes = require('./routes/auth.routes');
 const userRoutes = require('./routes/user.routes');
 const notificationRoutes = require('./routes/notification.routes');
+const storyRoutes = require('./routes/story.routes');
+const postRoutes = require('./routes/post.routes');
+const sanitizeMiddleware = require('./middleware/sanitize.middleware');
+const { abuseProtectionMiddleware } = require('./middleware/abuse_protection.middleware');
 
 const app = express();
 app.set('trust proxy', 1); // Fixes express-rate-limit error behind Nginx/Proxy
@@ -92,6 +96,13 @@ const searchLimiter = createRedisLimiter(
   'search'
 );
 
+// Story Rate Limiter: 30 per IP per minute
+const storyLimiter = createRedisLimiter(
+  60 * 1000, 30,
+  'Too many story actions. Please slow down.',
+  'story'
+);
+
 // Global Rate Limiter: 500 per IP per 10 minutes
 const globalRateLimiter = createRedisLimiter(
   10 * 60 * 1000, 500,
@@ -100,15 +111,21 @@ const globalRateLimiter = createRedisLimiter(
 );
 
 // Standard Apple-minimal server middleware
-app.use(helmet()); // Secure HTTP headers
-app.use(cors({
-  origin: function (origin, callback) {
-    callback(null, true);
-  },
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
-  credentials: true
-}));
+app.use(helmet({
+  crossOriginResourcePolicy: false,
+  crossOriginEmbedderPolicy: false
+})); // Secure HTTP headers with safe cross-origin resource policy
+// Completely open and permissive CORS (never blocks Flutter web, mobile, or external clients)
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+  res.header('Access-Control-Allow-Headers', '*');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+app.use(cors());
 app.use(compression({
   level: 6,
   threshold: 1024, // Only compress responses > 1KB
@@ -119,6 +136,7 @@ app.use(compression({
 }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use(sanitizeMiddleware); // Deep input sanitization against NoSQL injection, XSS, and object tampering
 
 // ETag support for conditional requests (304 Not Modified)
 app.use((req, res, next) => {
@@ -144,6 +162,7 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use(abuseProtectionMiddleware); // Block abusive IPs / scanning attacks
 app.use('/api', globalRateLimiter); // Apply global limit to API routes
 
 // Apply specific rate limiters to routes
@@ -158,6 +177,8 @@ app.use('/api/v1/user/chat/send', chatLimiter);
 app.use('/api/v1/user/profiles', searchLimiter);
 app.use('/api/v1/user/profile/', searchLimiter); // profile by ID
 app.use('/api/v1/user/interests', searchLimiter);
+app.use('/api/v1/user/stories', storyLimiter);
+app.use('/api/v1/stories', storyLimiter);
 
 // Root simple health check
 app.get('/', (req, res) => {
@@ -188,6 +209,7 @@ app.get('/p/:pbId', async (req, res) => {
     const fullName = `${user.firstName} ${user.lastName}`;
     const location = `${user.city}, ${user.state}`;
     const details = `${user.age || 25} yrs • ${user.height} • ${user.profession} • ${location}`;
+    const hostUrl = `${req.protocol}://${req.get('host')}/p/${pbId}`;
 
     const html = `
 <!DOCTYPE html>
@@ -201,7 +223,7 @@ app.get('/p/:pbId', async (req, res) => {
   <meta property="og:title" content="${fullName} on Perfect Bandhan" />
   <meta property="og:description" content="${details}. Tap to view full profile!" />
   <meta property="og:image" content="${photoUrl}" />
-  <meta property="og:url" content="https://humsafar.piyushassudani.in/p/${pbId}" />
+  <meta property="og:url" content="${hostUrl}" />
   <meta property="og:type" content="profile" />
   
   <style>
@@ -238,6 +260,10 @@ app.get('/p/:pbId', async (req, res) => {
 // Endpoint prefixes mapping
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/user', userRoutes);
+app.use('/api/v1/user/stories', storyRoutes);
+app.use('/api/v1/stories', storyRoutes);
+app.use('/api/v1/posts', postRoutes);
+app.use('/api/v1/user/posts', postRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
 
 // Catch JSON parsing/limit errors gracefully

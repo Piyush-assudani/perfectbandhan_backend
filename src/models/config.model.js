@@ -24,7 +24,7 @@ const AppConfigSchema = new mongoose.Schema({
   },
   downloadUrl: {
     type: String,
-    default: 'https://play.google.com/store/apps/details?id=com.piyush.assudani'
+    default: 'https://play.google.com/store/apps/details?id=com.perfectbandhan.app'
   },
   isMaintenanceMode: {
     type: Boolean,

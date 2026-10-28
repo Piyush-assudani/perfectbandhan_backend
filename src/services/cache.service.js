@@ -10,17 +10,23 @@ class CacheService {
    * Get a cached value (Redis first, then local)
    */
   async get(key) {
-    // Try Redis first
+    // 1. Try ultra-fast L1 local memory cache first (< 0.1ms)
+    const localVal = localCache.get(key);
+    if (localVal !== undefined) return localVal;
+
+    // 2. Try Redis L2 distributed cache if available
     if (USE_REDIS && redisService.isReady) {
       try {
         const val = await redisService.get(key);
-        if (val !== null) return val;
+        if (val !== null && val !== undefined) {
+          localCache.set(key, val, 60); // Store in L1 for 60s
+          return val;
+        }
       } catch (err) {
-        console.warn('[Cache] Redis GET failed, falling back to local:', err.message);
+        console.warn('[Cache] Redis GET failed:', err.message);
       }
     }
-    // Fallback to local cache
-    return localCache.get(key);
+    return null;
   }
 
   /**

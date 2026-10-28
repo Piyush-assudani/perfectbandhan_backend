@@ -10,8 +10,8 @@ const UserSchema = new mongoose.Schema({
   pbId: {
     type: String,
     unique: true,
-    index: true,
-    default: ''
+    sparse: true,
+    index: true
   },
   password: {
     type: String,
@@ -370,7 +370,12 @@ const UserSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Compound indexes for optimal matrimony search query execution
+// High-performance compound indexes for matrimony search, daily picks, and rapid lookups
+UserSchema.index({ isActive: 1, profileHidden: 1, gender: 1 });
+UserSchema.index({ isActive: 1, gender: 1, adminRankScore: -1, isSeriousSeeker: -1, activityScore: -1 });
+UserSchema.index({ isActive: 1, gender: 1, createdAt: -1 });
+UserSchema.index({ phone: 1, isActive: 1 });
+UserSchema.index({ pbId: 1, isActive: 1 });
 UserSchema.index({ gender: 1, profileHidden: 1, maritalStatus: 1 });
 UserSchema.index({ gender: 1, city: 1, dob: 1 });
 UserSchema.index({ gender: 1, professionSector: 1, incomeBracket: 1 });

@@ -13,8 +13,6 @@ const { queueProfileWrite, invalidateCache } = require('../middleware/dedupe.mid
 
 exports.profileExists = async (phone) => {
   try {
-    if (phone === '9413879444' || phone === '+919413879444') return true;
-
     const user = await User.findOne({ phone });
     // Check if firstName exists AND is not the placeholder set by setPassword
     return !!(user && user.firstName && user.email !== 'temp@sindhishadi.com');
@@ -48,9 +46,9 @@ exports.getMyProfile = async (req, res) => {
         id: user._id.toString(),
         phone: user.phone,
         email: user.email || '',
-        firstName: user.firstName || 'Developer',
-        lastName: user.lastName || 'Account',
-        name: `${user.firstName || 'Developer'} ${user.lastName || 'Account'}`.trim(),
+        firstName: user.firstName || 'Member',
+        lastName: user.lastName || '',
+        name: `${user.firstName || 'Member'} ${user.lastName || ''}`.trim(),
         age,
         gender: user.gender || 'Male',
         height: user.height || '',
@@ -208,12 +206,8 @@ exports.createProfile = async (req, res) => {
         delete profileData.dob; // Ignore silently instead of blocking
       }
       if (profileData.gender && existingUser.gender && profileData.gender !== existingUser.gender) {
-        if (existingUser.phone === '9413879444') {
-          console.log(`[User Controller] Developer account +91 ${profileData.phone} allowed to change gender.`);
-        } else {
-          console.warn(`[User Controller] Ignoring gender change during profile update for +91 ${profileData.phone}`);
-          delete profileData.gender; // Ignore silently instead of blocking
-        }
+        console.warn(`[User Controller] Ignoring gender change during profile update for +91 ${profileData.phone}`);
+        delete profileData.gender; // Ignore silently instead of blocking
       }
     }
 
@@ -258,14 +252,10 @@ exports.createProfile = async (req, res) => {
     let user = existingUser;
     if (user) {
       Object.assign(user, profileData);
-      if (user.phone === '9413879444') {
-        await user.save({ validateBeforeSave: false });
-      } else {
-        // Use write-behind cache for profile updates to reduce DB load
-        await queueProfileWrite(user._id, profileData);
-        // Also update local object for immediate response
-        Object.assign(user, profileData);
-      }
+      // Use write-behind cache for profile updates to reduce DB load
+      await queueProfileWrite(user._id, profileData);
+      // Also update local object for immediate response
+      Object.assign(user, profileData);
     } else {
       profileData.pbId = await generateUniquePbId();
       user = new User(profileData);
@@ -489,14 +479,16 @@ exports.getProfiles = async (req, res) => {
     }
 
     const callerPhone = req.user.phone;
-    const callerProfile = await User.findOne({ phone: callerPhone });
+    const callerProfile = await User.findOne({ phone: callerPhone })
+      .select('gender blockedBy partnerPreferences')
+      .lean();
     
     // Default fallback to 'Male' if caller profile hasn't loaded (so opposite is 'Female')
     const callerGender = callerProfile ? callerProfile.gender : 'Male';
     const oppositeGender = callerGender === 'Male' ? 'Female' : 'Male';
 
     const blockedByArray = callerProfile && callerProfile.blockedBy ? callerProfile.blockedBy : [];
-    const excludedPhones = [...blockedByArray, '9413879444', '+919413879444'];
+    const excludedPhones = [...blockedByArray];
 
     const query = { 
       gender: oppositeGender, 
@@ -1175,8 +1167,7 @@ exports.acceptInterest = async (req, res) => {
 exports.getAllUsersAdmin = async (req, res) => {
   try {
     const adminPhone = process.env.ADMIN_PHONE || '9999999999';
-    const isSpecialDev = (req.user && req.user.phone === '9413879444');
-    if (!req.user || (req.user.phone !== adminPhone && !isSpecialDev && !req.user.isAdmin && !req.user.isDeveloper)) {
+    if (!req.user || (req.user.phone !== adminPhone && !req.user.isAdmin && !req.user.isDeveloper)) {
       console.warn(`[Admin Check] Unauthorized access attempt by phone: ${req.user ? req.user.phone : 'guest'}`);
       return res.status(403).json({ status: 'error', message: 'Forbidden. Access restricted to admin only.' });
     }
@@ -1402,7 +1393,7 @@ exports.sendChatMessage = async (req, res) => {
     const toCallerAccepted = mutualInterests.some(i => i.from_phone === targetUserObj.phone);
     const isMutualConnection = fromCallerAccepted && toCallerAccepted;
     
-    if (!isMutualConnection && callerPhone !== '9413879444' && callerPhone !== '+919413879444') {
+    if (!isMutualConnection) {
       return res.status(403).json({ status: 'locked', message: 'Chat is locked. You must have an accepted mutual interest first.' });
     }
 
@@ -1488,7 +1479,7 @@ exports.sendChatMessage = async (req, res) => {
 exports.adminBroadcastPush = async (req, res) => {
   try {
     const callerPhone = req.user.phone;
-    const adminPhone = process.env.ADMIN_PHONE || '9413879444';
+    const adminPhone = process.env.ADMIN_PHONE || '9999999999';
 
     if (callerPhone !== adminPhone && !req.user.isAdmin) {
       return res.status(403).json({ status: 'error', message: 'Access denied. Admins only.' });
@@ -1521,7 +1512,7 @@ exports.adminBroadcastPush = async (req, res) => {
 exports.adminEditUser = async (req, res) => {
   try {
     const callerPhone = req.user.phone;
-    const adminPhone = process.env.ADMIN_PHONE || '9413879444';
+    const adminPhone = process.env.ADMIN_PHONE || '9999999999';
 
     if (callerPhone !== adminPhone && !req.user.isAdmin) {
       return res.status(403).json({ status: 'error', message: 'Access denied. Admins only.' });
@@ -1559,7 +1550,7 @@ exports.adminEditUser = async (req, res) => {
 exports.adminChangePassword = async (req, res) => {
   try {
     const callerPhone = req.user.phone;
-    const adminPhone = process.env.ADMIN_PHONE || '9413879444';
+    const adminPhone = process.env.ADMIN_PHONE || '9999999999';
 
     if (callerPhone !== adminPhone && !req.user.isAdmin) {
       return res.status(403).json({ status: 'error', message: 'Access denied. Admins only.' });
@@ -1761,7 +1752,7 @@ exports.getAppConfig = async (req, res) => {
       minimumVersion: "2.0.0", // Hardcoded enforcement to kill V1
       forceUpdate: config.forceUpdate ?? true,
       updateMessage: config.updateMessage || "A critical update is required. Please update the app from the Play Store to continue.",
-      downloadUrl: config.downloadUrl || "https://perfectbandhan.in",
+      downloadUrl: config.downloadUrl || "https://play.google.com/store/apps/details?id=com.perfectbandhan.app",
       chatComingSoon: config.chatComingSoon || false,
       isMaintenanceMode: config.isMaintenanceMode || false,
       maintenanceMessage: config.maintenanceMessage || 'Software under maintenance, come back later.',
@@ -1786,8 +1777,7 @@ exports.getAppConfig = async (req, res) => {
 exports.updateAppConfig = async (req, res) => {
   try {
     const adminPhone = process.env.ADMIN_PHONE || '9999999999';
-    const isSpecialDev = (req.user && req.user.phone === '9413879444');
-    if (!req.user || (req.user.phone !== adminPhone && !isSpecialDev && !req.user.isAdmin && !req.user.isDeveloper)) {
+    if (!req.user || (req.user.phone !== adminPhone && !req.user.isAdmin && !req.user.isDeveloper)) {
       return res.status(403).json({ status: 'error', message: 'Forbidden. Admin access required.' });
     }
 
@@ -2213,13 +2203,8 @@ const generateUniquePbId = require('../utils/generatePbId');
 exports.developerToggleGender = async (req, res) => {
   try {
     const userPhone = req.user.phone;
-    // IMPORTANT: Hardcode the developer phone number here. 
-    // This assumes the developer uses '9413879444' as their test account.
-    // If they use a different number, they can update this.
-    const DEVELOPER_TEST_PHONE = '9413879444';
-    
-    if (userPhone !== DEVELOPER_TEST_PHONE) {
-      return res.status(403).json({ status: 'error', message: 'Forbidden. This action is only allowed for the developer test account.' });
+    if (!req.user.isDeveloper) {
+      return res.status(403).json({ status: 'error', message: 'Forbidden. This action is only allowed for the developer account.' });
     }
 
     const User = require('../models/user.model');
@@ -2494,7 +2479,7 @@ Provide the response in JSON format exactly like this:
 
 exports.getPhoneLogs = async (req, res) => {
   try {
-    const adminPhones = (process.env.ADMIN_PHONES || '9413879444').split(',');
+    const adminPhones = (process.env.ADMIN_PHONES || '9999999999').split(',');
     if (!adminPhones.includes(req.user.phone) && !req.user.isAdmin && !req.user.isDeveloper) {
       return res.status(403).json({ status: 'error', message: 'Forbidden' });
     }
@@ -2555,8 +2540,7 @@ exports.getOnboardingProgress = async (req, res) => {
 exports.createDeveloperAccount = async (req, res) => {
   try {
     const adminPhone = process.env.ADMIN_PHONE || '9999999999';
-    const isSpecialDev = (req.user && req.user.phone === '9413879444');
-    if (!req.user || (req.user.phone !== adminPhone && !isSpecialDev && !req.user.isAdmin && !req.user.isDeveloper)) {
+    if (!req.user || (req.user.phone !== adminPhone && !req.user.isAdmin && !req.user.isDeveloper)) {
       return res.status(403).json({ status: 'error', message: 'Forbidden. Admin access required.' });
     }
 
